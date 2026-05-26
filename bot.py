@@ -79,5 +79,5 @@ async def start_api():
 async def on_ready():
     await start_api()
     print(f"Бот запущен: {bot.user}")
-
-bot.run("token")
+import os
+bot.run(os.environ.get("TOKEN"))

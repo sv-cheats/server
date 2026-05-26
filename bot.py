@@ -4,15 +4,16 @@ from aiohttp import web
 import sqlite3
 import random
 import string
+import hashlib
 import os
 
-# ── База данных ──
 conn = sqlite3.connect("keys.db")
 conn.execute("""
-    CREATE TABLE IF NOT EXISTS keys (
-        key TEXT PRIMARY KEY,
-        username TEXT,
-        used INTEGER DEFAULT 0
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE,
+        password TEXT,
+        key TEXT UNIQUE
     )
 """)
 conn.commit()
@@ -21,76 +22,80 @@ def gen_key():
     parts = [''.join(random.choices(string.ascii_uppercase + string.digits, k=4)) for _ in range(4)]
     return "HARM-" + "-".join(parts)
 
-# ── Discord бот ──
+def hash_pass(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
 intents = discord.Intents.default()
 bot = discord.Bot()
 
 OWNER_ID = 1441291795320406029
 
-@bot.slash_command(name="genkey", description="Генерация ключа")
-async def genkey(ctx, username: str):
+@bot.slash_command(name="createuser", description="Создать пользователя")
+async def createuser(ctx, username: str, password: str):
     if ctx.author.id != OWNER_ID:
         await ctx.respond("Нет доступа.", ephemeral=True)
         return
     key = gen_key()
-    conn.execute("INSERT INTO keys (key, username) VALUES (?, ?)", (key, username))
-    conn.commit()
-    await ctx.respond(f"Ключ для `{username}`: `{key}`", ephemeral=True)
+    try:
+        conn.execute(
+            "INSERT INTO users (username, password, key) VALUES (?, ?, ?)",
+            (username, hash_pass(password), key)
+        )
+        conn.commit()
+        await ctx.respond(
+            f"✅ Пользователь создан!\n"
+            f"Ник: `{username}`\n"
+            f"Пароль: `{password}`\n"
+            f"Ключ: `{key}`",
+            ephemeral=True
+        )
+    except sqlite3.IntegrityError:
+        await ctx.respond("Пользователь уже существует.", ephemeral=True)
 
-@bot.slash_command(name="keylist", description="Список ключей")
-async def keylist(ctx):
+@bot.slash_command(name="userlist", description="Список пользователей")
+async def userlist(ctx):
     if ctx.author.id != OWNER_ID:
         await ctx.respond("Нет доступа.", ephemeral=True)
         return
-    rows = conn.execute("SELECT key, username, used FROM keys").fetchall()
+    rows = conn.execute("SELECT username, key FROM users").fetchall()
     if not rows:
-        await ctx.respond("Ключей нет.", ephemeral=True)
+        await ctx.respond("Пользователей нет.", ephemeral=True)
         return
-    text = "\n".join([f"`{r[0]}` — {r[1]} — {'✅' if r[2] else '❌'}" for r in rows])
+    text = "\n".join([f"`{r[1]}` — {r[0]}" for r in rows])
     await ctx.respond(text, ephemeral=True)
 
-@bot.slash_command(name="delkey", description="Удалить ключ")
-async def delkey(ctx, key: str):
+@bot.slash_command(name="deluser", description="Удалить пользователя")
+async def deluser(ctx, username: str):
     if ctx.author.id != OWNER_ID:
         await ctx.respond("Нет доступа.", ephemeral=True)
         return
-    conn.execute("DELETE FROM keys WHERE key = ?", (key,))
+    conn.execute("DELETE FROM users WHERE username = ?", (username,))
     conn.commit()
-    await ctx.respond(f"Ключ `{key}` удалён.", ephemeral=True)
+    await ctx.respond(f"Пользователь `{username}` удалён.", ephemeral=True)
 
-@bot.slash_command(name="renamekey", description="Изменить username у ключа")
-async def renamekey(ctx, key: str, new_username: str):
-    if ctx.author.id != OWNER_ID:
-        await ctx.respond("Нет доступа.", ephemeral=True)
-        return
-    row = conn.execute("SELECT key FROM keys WHERE key = ?", (key,)).fetchone()
-    if not row:
-        await ctx.respond("Ключ не найден.", ephemeral=True)
-        return
-    conn.execute("UPDATE keys SET username = ? WHERE key = ?", (new_username, key))
-    conn.commit()
-    await ctx.respond(f"Username для `{key}` изменён на `{new_username}`.", ephemeral=True)
-
-# ── HTTP API для Lua ──
-async def check_key(request):
+# ── HTTP API ──
+async def login(request):
     try:
         data = await request.json()
     except:
         return web.json_response({"valid": False, "reason": "bad request"})
 
-    key = data.get("key", "").strip()
-    row = conn.execute("SELECT username, used FROM keys WHERE key = ?", (key,)).fetchone()
+    username = data.get("username", "").strip()
+    password = data.get("password", "").strip()
+
+    row = conn.execute(
+        "SELECT key FROM users WHERE username = ? AND password = ?",
+        (username, hash_pass(password))
+    ).fetchone()
 
     if not row:
-        return web.json_response({"valid": False, "reason": "invalid key"})
+        return web.json_response({"valid": False, "reason": "invalid login"})
 
-    username = row[0] if row[0] else "unknown"
-
-    return web.json_response({"valid": True, "username": username})
+    return web.json_response({"valid": True, "username": username, "key": row[0]})
 
 async def start_api():
     app = web.Application()
-    app.router.add_post("/check", check_key)
+    app.router.add_post("/login", login)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 8080)

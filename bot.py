@@ -4,6 +4,7 @@ from aiohttp import web
 import sqlite3
 import random
 import string
+import os
 
 # ── База данных ──
 conn = sqlite3.connect("keys.db")
@@ -24,10 +25,11 @@ def gen_key():
 intents = discord.Intents.default()
 bot = discord.Bot()
 
+OWNER_ID = 1441291795320406029
+
 @bot.slash_command(name="genkey", description="Генерация ключа")
 async def genkey(ctx, username: str):
-    # Только ты можешь выдавать ключи (вставь свой Discord ID)
-    if ctx.author.id != 1441291795320406029:
+    if ctx.author.id != OWNER_ID:
         await ctx.respond("Нет доступа.", ephemeral=True)
         return
     key = gen_key()
@@ -37,7 +39,7 @@ async def genkey(ctx, username: str):
 
 @bot.slash_command(name="keylist", description="Список ключей")
 async def keylist(ctx):
-    if ctx.author.id != 1441291795320406029:
+    if ctx.author.id != OWNER_ID:
         await ctx.respond("Нет доступа.", ephemeral=True)
         return
     rows = conn.execute("SELECT key, username, used FROM keys").fetchall()
@@ -49,23 +51,42 @@ async def keylist(ctx):
 
 @bot.slash_command(name="delkey", description="Удалить ключ")
 async def delkey(ctx, key: str):
-    if ctx.author.id != 1441291795320406029:
+    if ctx.author.id != OWNER_ID:
         await ctx.respond("Нет доступа.", ephemeral=True)
         return
     conn.execute("DELETE FROM keys WHERE key = ?", (key,))
     conn.commit()
     await ctx.respond(f"Ключ `{key}` удалён.", ephemeral=True)
 
+@bot.slash_command(name="renamekey", description="Изменить username у ключа")
+async def renamekey(ctx, key: str, new_username: str):
+    if ctx.author.id != OWNER_ID:
+        await ctx.respond("Нет доступа.", ephemeral=True)
+        return
+    row = conn.execute("SELECT key FROM keys WHERE key = ?", (key,)).fetchone()
+    if not row:
+        await ctx.respond("Ключ не найден.", ephemeral=True)
+        return
+    conn.execute("UPDATE keys SET username = ? WHERE key = ?", (new_username, key))
+    conn.commit()
+    await ctx.respond(f"Username для `{key}` изменён на `{new_username}`.", ephemeral=True)
+
 # ── HTTP API для Lua ──
 async def check_key(request):
-    data = await request.json()
-    key  = data.get("key", "")
-    row  = conn.execute("SELECT username, used FROM keys WHERE key = ?", (key,)).fetchone()
+    try:
+        data = await request.json()
+    except:
+        return web.json_response({"valid": False, "reason": "bad request"})
+
+    key = data.get("key", "").strip()
+    row = conn.execute("SELECT username, used FROM keys WHERE key = ?", (key,)).fetchone()
+
     if not row:
-        return web.json_response({"valid": False, "reason": "invalid"})
-    if row[1]:
-        return web.json_response({"valid": False, "reason": "used"})
-    return web.json_response({"valid": True, "username": row[0]})
+        return web.json_response({"valid": False, "reason": "invalid key"})
+
+    username = row[0] if row[0] else "unknown"
+
+    return web.json_response({"valid": True, "username": username})
 
 async def start_api():
     app = web.Application()
@@ -74,10 +95,11 @@ async def start_api():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 8080)
     await site.start()
+    print("API запущен на порту 8080")
 
 @bot.event
 async def on_ready():
     await start_api()
     print(f"Бот запущен: {bot.user}")
-import os
+
 bot.run(os.environ.get("TOKEN"))

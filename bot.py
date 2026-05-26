@@ -27,7 +27,7 @@ bot = discord.Bot()
 @bot.slash_command(name="genkey", description="Генерация ключа")
 async def genkey(ctx, username: str):
     # Только ты можешь выдавать ключи (вставь свой Discord ID)
-    if ctx.author.id != 123456789:
+    if ctx.author.id != 1441291795320406029:
         await ctx.respond("Нет доступа.", ephemeral=True)
         return
     key = gen_key()
@@ -37,7 +37,7 @@ async def genkey(ctx, username: str):
 
 @bot.slash_command(name="keylist", description="Список ключей")
 async def keylist(ctx):
-    if ctx.author.id != 123456789:
+    if ctx.author.id != 1441291795320406029:
         await ctx.respond("Нет доступа.", ephemeral=True)
         return
     rows = conn.execute("SELECT key, username, used FROM keys").fetchall()
@@ -49,7 +49,7 @@ async def keylist(ctx):
 
 @bot.slash_command(name="delkey", description="Удалить ключ")
 async def delkey(ctx, key: str):
-    if ctx.author.id != 123456789:
+    if ctx.author.id != 1441291795320406029:
         await ctx.respond("Нет доступа.", ephemeral=True)
         return
     conn.execute("DELETE FROM keys WHERE key = ?", (key,))

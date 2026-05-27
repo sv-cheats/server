@@ -40,19 +40,26 @@ def hash_pass(password):
 
 def obfuscate_lua(code):
     encoded = base64.b64encode(code.encode("utf-8")).decode("utf-8")
-    decoder = 'local b="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"\n'
-    decoder += 'local function decode(s)\n'
-    decoder += '    s=s:gsub("[^"..b.."=]","")\n'
-    decoder += '    return(s:gsub("(.?)(.?)(.?)(.?)",function(a,b2,c,d)\n'
-    decoder += '        if a=="" then return "" end\n'
-    decoder += '        local n=((b:find(a,1,true) or 1)-1)*262144+((b:find(b2,1,true) or 1)-1)*4096+((b:find(c,1,true) or 1)-1)*64+((b:find(d,1,true) or 1)-1)\n'
-    decoder += '        local x=string.char(math.floor(n/65536))\n'
-    decoder += '        local y=b2~="" and string.char(math.floor(n/256)%256) or ""\n'
-    decoder += '        local z=c~="" and c~="=" and string.char(n%256) or ""\n'
-    decoder += '        return x..y..z\n'
-    decoder += '    end))\n'
-    decoder += 'end\n'
-    decoder += f'load(decode("{encoded}"))() \n'
+    decoder = f"""local __b64chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local function __decode(s)
+    s=s:gsub("[^"..__b64chars.."=]","")
+    local result=""
+    local i=1
+    while i<=#s do
+        local a,b,c,d=s:sub(i,i),s:sub(i+1,i+1),s:sub(i+2,i+2),s:sub(i+3,i+3)
+        local n1=(__b64chars:find(a,1,true) or 1)-1
+        local n2=(__b64chars:find(b,1,true) or 1)-1
+        local n3=(__b64chars:find(c,1,true) or 1)-1
+        local n4=(__b64chars:find(d,1,true) or 1)-1
+        local n=n1*262144+n2*4096+n3*64+n4
+        result=result..string.char(math.floor(n/65536))
+        if c~="" and c~="=" then result=result..string.char(math.floor(n/256)%256) end
+        if d~="" and d~="=" then result=result..string.char(n%256) end
+        i=i+4
+    end
+    return result
+end
+load(__decode("{encoded}"))()"""
     return decoder
 
 intents = discord.Intents.default()
@@ -150,9 +157,8 @@ async def get_loader(ctx, username: str):
     row = conn.execute(
         "SELECT plain_password FROM users WHERE username = ?", (username,)
     ).fetchone()
-    all_users = conn.execute("SELECT username FROM users").fetchall()
     if not row:
-        await ctx.respond(f"❌ Не найден. Все юзеры: {all_users}", ephemeral=True)
+        await ctx.respond(f"❌ Пользователь `{username}` не найден.", ephemeral=True)
         return
     if not row[0]:
         await ctx.respond("❌ Пароль не сохранён.", ephemeral=True)

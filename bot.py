@@ -35,22 +35,23 @@ async def createuser(ctx, username: str, password: str):
     if ctx.author.id != OWNER_ID:
         await ctx.respond("Нет доступа.", ephemeral=True)
         return
+    exists = conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone()
+    if exists:
+        await ctx.respond(f"❌ Пользователь `{username}` уже существует.", ephemeral=True)
+        return
     key = gen_key()
-    try:
-        conn.execute(
-            "INSERT INTO users (username, password, key) VALUES (?, ?, ?)",
-            (username, hash_pass(password), key)
-        )
-        conn.commit()
-        await ctx.respond(
-            f"✅ Пользователь создан!\n"
-            f"Ник: `{username}`\n"
-            f"Пароль: `{password}`\n"
-            f"Ключ: `{key}`",
-            ephemeral=True
-        )
-    except sqlite3.IntegrityError:
-        await ctx.respond("Пользователь уже существует.", ephemeral=True)
+    conn.execute(
+        "INSERT INTO users (username, password, key) VALUES (?, ?, ?)",
+        (username, hash_pass(password), key)
+    )
+    conn.commit()
+    await ctx.respond(
+        f"✅ Пользователь создан!\n"
+        f"Ник: `{username}`\n"
+        f"Пароль: `{password}`\n"
+        f"Ключ: `{key}`",
+        ephemeral=True
+    )
 
 @bot.slash_command(name="userlist", description="Список пользователей")
 async def userlist(ctx):
@@ -73,6 +74,19 @@ async def deluser(ctx, username: str):
     conn.commit()
     await ctx.respond(f"Пользователь `{username}` удалён.", ephemeral=True)
 
+@bot.slash_command(name="renameuser", description="Изменить ник пользователя")
+async def renameuser(ctx, username: str, new_username: str):
+    if ctx.author.id != OWNER_ID:
+        await ctx.respond("Нет доступа.", ephemeral=True)
+        return
+    exists = conn.execute("SELECT 1 FROM users WHERE username = ?", (new_username,)).fetchone()
+    if exists:
+        await ctx.respond(f"❌ Ник `{new_username}` уже занят.", ephemeral=True)
+        return
+    conn.execute("UPDATE users SET username = ? WHERE username = ?", (new_username, username))
+    conn.commit()
+    await ctx.respond(f"Ник изменён: `{username}` → `{new_username}`", ephemeral=True)
+
 # ── HTTP API ──
 async def login(request):
     try:
@@ -84,14 +98,14 @@ async def login(request):
     password = data.get("password", "").strip()
 
     row = conn.execute(
-        "SELECT key FROM users WHERE username = ? AND password = ?",
+        "SELECT username FROM users WHERE username = ? AND password = ?",
         (username, hash_pass(password))
     ).fetchone()
 
     if not row:
         return web.json_response({"valid": False, "reason": "invalid login"})
 
-    return web.json_response({"valid": True, "username": username, "key": row[0]})
+    return web.json_response({"valid": True, "username": row[0]})
 
 async def start_api():
     app = web.Application()

@@ -7,6 +7,7 @@ import string
 import hashlib
 import os
 import io
+import base64
 
 conn = sqlite3.connect("keys.db")
 
@@ -36,6 +37,23 @@ def gen_key():
 
 def hash_pass(password):
     return hashlib.sha256(password.encode()).hexdigest()
+
+def obfuscate_lua(code):
+    encoded = base64.b64encode(code.encode("utf-8")).decode("utf-8")
+    decoder = 'local b="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"\n'
+    decoder += 'local function decode(s)\n'
+    decoder += '    s=s:gsub("[^"..b.."=]","")\n'
+    decoder += '    return(s:gsub("(.?)(.?)(.?)(.?)",function(a,b2,c,d)\n'
+    decoder += '        if a=="" then return "" end\n'
+    decoder += '        local n=((b:find(a,1,true) or 1)-1)*262144+((b:find(b2,1,true) or 1)-1)*4096+((b:find(c,1,true) or 1)-1)*64+((b:find(d,1,true) or 1)-1)\n'
+    decoder += '        local x=string.char(math.floor(n/65536))\n'
+    decoder += '        local y=b2~="" and string.char(math.floor(n/256)%256) or ""\n'
+    decoder += '        local z=c~="" and c~="=" and string.char(n%256) or ""\n'
+    decoder += '        return x..y..z\n'
+    decoder += '    end))\n'
+    decoder += 'end\n'
+    decoder += f'load(decode("{encoded}"]]()\n'
+    return decoder
 
 intents = discord.Intents.default()
 bot = discord.Bot()
@@ -145,6 +163,7 @@ async def get_loader(ctx, username: str):
         return
     lua = lua.replace('username = "flame"', f'username = "{username}"')
     lua = lua.replace('password = "12345"', f'password = "{row[0]}"')
+    lua = obfuscate_lua(lua)
     file = io.BytesIO(lua.encode("utf-8"))
     await ctx.respond(
         f"✅ Лоадер для `{username}`:",
@@ -197,42 +216,30 @@ async def delkey(ctx, key: str):
     conn.commit()
     await ctx.respond(f"Ключ `{key}` удалён.", ephemeral=True)
 
-# ── HTTP API ──
-
 async def register(request):
     try:
         data = await request.json()
     except:
         return web.json_response({"valid": False, "reason": "bad request"})
-
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
     key      = data.get("key", "").strip()
-
     if not username or not password or not key:
         return web.json_response({"valid": False, "reason": "missing fields"})
-
-    row = conn.execute(
-        "SELECT scripts, used FROM redeem_keys WHERE key = ?", (key,)
-    ).fetchone()
+    row = conn.execute("SELECT scripts, used FROM redeem_keys WHERE key = ?", (key,)).fetchone()
     if not row:
         return web.json_response({"valid": False, "reason": "invalid key"})
     if row[1]:
         return web.json_response({"valid": False, "reason": "key already used"})
-
-    exists = conn.execute(
-        "SELECT 1 FROM users WHERE username = ?", (username,)
-    ).fetchone()
+    exists = conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone()
     if exists:
         return web.json_response({"valid": False, "reason": "username taken"})
-
     conn.execute(
         "INSERT INTO users (username, password, plain_password, scripts) VALUES (?, ?, ?, ?)",
         (username, hash_pass(password), password, row[0])
     )
     conn.execute("UPDATE redeem_keys SET used = 1 WHERE key = ?", (key,))
     conn.commit()
-
     return web.json_response({"valid": True, "username": username})
 
 async def login(request):
@@ -240,18 +247,14 @@ async def login(request):
         data = await request.json()
     except:
         return web.json_response({"valid": False, "reason": "bad request"})
-
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
-
     row = conn.execute(
         "SELECT username, scripts FROM users WHERE username = ? AND password = ?",
         (username, hash_pass(password))
     ).fetchone()
-
     if not row:
         return web.json_response({"valid": False, "reason": "invalid login"})
-
     return web.json_response({"valid": True, "username": row[0], "scripts": row[1] or ""})
 
 async def redeem(request):
@@ -259,34 +262,26 @@ async def redeem(request):
         data = await request.json()
     except:
         return web.json_response({"valid": False, "reason": "bad request"})
-
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
     key      = data.get("key", "").strip()
-
     user = conn.execute(
         "SELECT scripts FROM users WHERE username = ? AND password = ?",
         (username, hash_pass(password))
     ).fetchone()
     if not user:
         return web.json_response({"valid": False, "reason": "invalid login"})
-
-    row = conn.execute(
-        "SELECT scripts, used FROM redeem_keys WHERE key = ?", (key,)
-    ).fetchone()
+    row = conn.execute("SELECT scripts, used FROM redeem_keys WHERE key = ?", (key,)).fetchone()
     if not row:
         return web.json_response({"valid": False, "reason": "invalid key"})
     if row[1]:
         return web.json_response({"valid": False, "reason": "key already used"})
-
     existing = set(filter(None, user[0].split(",")))
     new      = set(filter(None, row[0].split(",")))
     merged   = ",".join(existing | new)
-
     conn.execute("UPDATE users SET scripts = ? WHERE username = ?", (merged, username))
     conn.execute("UPDATE redeem_keys SET used = 1 WHERE key = ?", (key,))
     conn.commit()
-
     return web.json_response({"valid": True, "scripts": merged})
 
 async def start_api():

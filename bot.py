@@ -150,8 +150,9 @@ async def get_loader(ctx, username: str):
     row = conn.execute(
         "SELECT plain_password FROM users WHERE username = ?", (username,)
     ).fetchone()
+    all_users = conn.execute("SELECT username FROM users").fetchall()
     if not row:
-        await ctx.respond(f"❌ Пользователь `{username}` не найден.", ephemeral=True)
+        await ctx.respond(f"❌ Не найден. Все юзеры: {all_users}", ephemeral=True)
         return
     if not row[0]:
         await ctx.respond("❌ Пароль не сохранён.", ephemeral=True)

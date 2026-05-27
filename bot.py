@@ -43,6 +43,33 @@ bot = discord.Bot()
 OWNER_ID = 1441291795320406029
 SCRIPTS  = ["Mandarin", "Overflame", "Antarctica"]
 
+@bot.slash_command(name="register", description="Зарегистрировать пользователя")
+async def register_cmd(ctx, username: str, password: str, key: str):
+    if ctx.author.id != OWNER_ID:
+        await ctx.respond("Нет доступа.", ephemeral=True)
+        return
+    row = conn.execute("SELECT scripts, used FROM redeem_keys WHERE key = ?", (key,)).fetchone()
+    if not row:
+        await ctx.respond("❌ Ключ не найден.", ephemeral=True)
+        return
+    if row[1]:
+        await ctx.respond("❌ Ключ уже использован.", ephemeral=True)
+        return
+    exists = conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone()
+    if exists:
+        await ctx.respond(f"❌ Ник `{username}` занят.", ephemeral=True)
+        return
+    conn.execute(
+        "INSERT INTO users (username, password, plain_password, scripts) VALUES (?, ?, ?, ?)",
+        (username, hash_pass(password), password, row[0])
+    )
+    conn.execute("UPDATE redeem_keys SET used = 1 WHERE key = ?", (key,))
+    conn.commit()
+    await ctx.respond(
+        f"✅ Пользователь создан!\nНик: `{username}`\nПароль: `{password}`",
+        ephemeral=True
+    )
+
 @bot.slash_command(name="genkey", description="Генерация ключа регистрации")
 async def genkey(ctx):
     if ctx.author.id != OWNER_ID:

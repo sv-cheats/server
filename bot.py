@@ -6,6 +6,7 @@ import random
 import string
 import hashlib
 import os
+import io
 
 conn = sqlite3.connect("keys.db")
 
@@ -14,6 +15,7 @@ conn.execute("""
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE,
         password TEXT,
+        plain_password TEXT,
         scripts TEXT DEFAULT ''
     )
 """)
@@ -39,9 +41,9 @@ intents = discord.Intents.default()
 bot = discord.Bot()
 
 OWNER_ID = 1441291795320406029
-SCRIPTS = ["Mandarin", "Overflame", "Antarctica"]
+SCRIPTS  = ["Mandarin", "Overflame", "Antarctica"]
 
-@bot.slash_command(name="genkey", description="Генерация ключа для регистрации (без скриптов)")
+@bot.slash_command(name="genkey", description="Генерация ключа регистрации")
 async def genkey(ctx):
     if ctx.author.id != OWNER_ID:
         await ctx.respond("Нет доступа.", ephemeral=True)
@@ -64,26 +66,64 @@ async def genkey2(ctx, scripts: str):
     conn.execute("INSERT INTO redeem_keys (key, scripts) VALUES (?, ?)", (key, ",".join(chosen)))
     conn.commit()
     await ctx.respond(
-        f"✅ Ключ со скриптами создан!\n"
-        f"Ключ: `{key}`\n"
-        f"Скрипты: `{', '.join(chosen)}`",
+        f"✅ Ключ со скриптами!\nКлюч: `{key}`\nСкрипты: `{', '.join(chosen)}`",
         ephemeral=True
     )
 
-@bot.slash_command(name="keylist", description="Список ключей")
-async def keylist(ctx):
+@bot.slash_command(name="redeem-key", description="Активировать ключ скриптов для юзера")
+async def redeem_key(ctx, username: str, key: str):
     if ctx.author.id != OWNER_ID:
         await ctx.respond("Нет доступа.", ephemeral=True)
         return
-    rows = conn.execute("SELECT key, scripts, used FROM redeem_keys").fetchall()
-    if not rows:
-        await ctx.respond("Ключей нет.", ephemeral=True)
+    user = conn.execute("SELECT scripts FROM users WHERE username = ?", (username,)).fetchone()
+    if not user:
+        await ctx.respond(f"❌ Пользователь `{username}` не найден.", ephemeral=True)
         return
-    text = "\n".join([
-        f"`{r[0]}` — {r[1] or 'регистрация'} — {'✅ использован' if r[2] else '❌ не использован'}"
-        for r in rows
-    ])
-    await ctx.respond(text, ephemeral=True)
+    row = conn.execute("SELECT scripts, used FROM redeem_keys WHERE key = ?", (key,)).fetchone()
+    if not row:
+        await ctx.respond("❌ Ключ не найден.", ephemeral=True)
+        return
+    if row[1]:
+        await ctx.respond("❌ Ключ уже использован.", ephemeral=True)
+        return
+    existing = set(filter(None, user[0].split(",")))
+    new      = set(filter(None, row[0].split(",")))
+    merged   = ",".join(existing | new)
+    conn.execute("UPDATE users SET scripts = ? WHERE username = ?", (merged, username))
+    conn.execute("UPDATE redeem_keys SET used = 1 WHERE key = ?", (key,))
+    conn.commit()
+    await ctx.respond(
+        f"✅ Скрипты активированы для `{username}`!\nСкрипты: `{merged}`",
+        ephemeral=True
+    )
+
+@bot.slash_command(name="get-loader", description="Получить лоадер с данными юзера")
+async def get_loader(ctx, username: str):
+    if ctx.author.id != OWNER_ID:
+        await ctx.respond("Нет доступа.", ephemeral=True)
+        return
+    row = conn.execute(
+        "SELECT plain_password FROM users WHERE username = ?", (username,)
+    ).fetchone()
+    if not row:
+        await ctx.respond(f"❌ Пользователь `{username}` не найден.", ephemeral=True)
+        return
+    if not row[0]:
+        await ctx.respond("❌ Пароль не сохранён.", ephemeral=True)
+        return
+    try:
+        lua = open("_loader.lua", "r", encoding="utf-8").read()
+    except:
+        await ctx.respond("❌ Файл _loader.lua не найден на сервере.", ephemeral=True)
+        return
+    lua = lua.replace('username = "flame"', f'username = "{username}"')
+    lua = lua.replace('password = "12345"', f'password = "{row[0]}"')
+    file = io.BytesIO(lua.encode("utf-8"))
+    await ctx.respond(
+        f"✅ Лоадер для `{username}`:",
+        file=discord.File(file, filename=f"_loader_{username}.lua"),
+        ephemeral=True
+    )
 
 @bot.slash_command(name="userlist", description="Список пользователей")
 async def userlist(ctx):
@@ -95,6 +135,21 @@ async def userlist(ctx):
         await ctx.respond("Пользователей нет.", ephemeral=True)
         return
     text = "\n".join([f"`{r[0]}` — {r[1] or 'нет скриптов'}" for r in rows])
+    await ctx.respond(text, ephemeral=True)
+
+@bot.slash_command(name="keylist", description="Список ключей")
+async def keylist(ctx):
+    if ctx.author.id != OWNER_ID:
+        await ctx.respond("Нет доступа.", ephemeral=True)
+        return
+    rows = conn.execute("SELECT key, scripts, used FROM redeem_keys").fetchall()
+    if not rows:
+        await ctx.respond("Ключей нет.", ephemeral=True)
+        return
+    text = "\n".join([
+        f"`{r[0]}` — {r[1] or 'регистрация'} — {'✅' if r[2] else '❌'}"
+        for r in rows
+    ])
     await ctx.respond(text, ephemeral=True)
 
 @bot.slash_command(name="deluser", description="Удалить пользователя")
@@ -133,7 +188,6 @@ async def register(request):
     row = conn.execute(
         "SELECT scripts, used FROM redeem_keys WHERE key = ?", (key,)
     ).fetchone()
-
     if not row:
         return web.json_response({"valid": False, "reason": "invalid key"})
     if row[1]:
@@ -146,13 +200,13 @@ async def register(request):
         return web.json_response({"valid": False, "reason": "username taken"})
 
     conn.execute(
-        "INSERT INTO users (username, password, scripts) VALUES (?, ?, ?)",
-        (username, hash_pass(password), row[0])
+        "INSERT INTO users (username, password, plain_password, scripts) VALUES (?, ?, ?, ?)",
+        (username, hash_pass(password), password, row[0])
     )
     conn.execute("UPDATE redeem_keys SET used = 1 WHERE key = ?", (key,))
     conn.commit()
 
-    return web.json_response({"valid": True, "username": username, "scripts": row[0]})
+    return web.json_response({"valid": True, "username": username})
 
 async def login(request):
     try:

@@ -52,7 +52,7 @@ def obfuscate_lua(code):
     decoder += '        return x..y..z\n'
     decoder += '    end))\n'
     decoder += 'end\n'
-    decoder += f'load(decode("{encoded}"]]()\n'
+    decoder += f'load(decode("{encoded}"))() \n'
     return decoder
 
 intents = discord.Intents.default()
